@@ -8,14 +8,20 @@ export const runtime = 'nodejs'
 
 const InputSchema = z.object({
   prompt: z.string().min(1).max(2000),
-  style: z.string().min(1),
-  key: z.string().min(1),
-  tempo: z.number().min(40).max(240),
-  instrument: z.string().min(1),
+  style: z.string().optional(),
+  key: z.string().optional(),
+  tempo: z.number().min(40).max(240).optional(),
+  instrument: z.string().optional(),
+  measures: z.number().int().min(1).max(128).optional(),
 })
 
 async function generateXml(input: z.infer<typeof InputSchema>): Promise<string> {
-  const userPrompt = `Paramètres utilisateur:\n- Style: ${input.style}\n- Tonalité: ${input.key}\n- Tempo: ${input.tempo} BPM\n- Instrument: ${input.instrument}\n- Consignes: ${input.prompt}\n\nCONTRAINTE DE FORMAT (OBLIGATOIRE): Produit EXCLUSIVEMENT un document MusicXML 3.1 valide (score-partwise) respectant les règles du système, avec l'en-tête, le DOCTYPE et la structure <part-list>/<score-part id=\"P1\"> cohérente avec <part id=\"P1\">. Aucune explication ni code block.`
+  const style = input.style ?? 'non spécifié'
+  const key = input.key ?? 'non spécifié'
+  const tempo = input.tempo != null ? `${input.tempo} BPM` : 'non spécifié'
+  const instrument = input.instrument ?? 'non spécifié'
+  const measures = input.measures != null ? String(input.measures) : 'non spécifié'
+  const userPrompt = `Paramètres utilisateur:\n- Style: ${style}\n- Tonalité: ${key}\n- Tempo: ${tempo}\n- Instrument: ${instrument}\n- Nombre de mesures souhaité: ${measures}\n- Consignes: ${input.prompt}\n\nSi un paramètre est non spécifié, choisis des valeurs musicales plausibles et cohérentes. Si un nombre de mesures est fourni, limiter la composition à ce nombre.\n\nCONTRAINTE DE FORMAT (OBLIGATOIRE): Produit EXCLUSIVEMENT un document MusicXML 3.1 valide (score-partwise) respectant les règles du système, avec l'en-tête, le DOCTYPE et la structure <part-list>/<score-part id=\"P1\"> cohérente avec <part id=\"P1\">. Aucune explication ni code block.`
   try {
     const controller = new AbortController()
     const t = setTimeout(() => controller.abort(), 80_000)

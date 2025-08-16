@@ -17,10 +17,11 @@ import { Spinner } from '@/components/ui/spinner'
 
 const generateSchema = z.object({
   prompt: z.string().min(1, 'Le prompt est obligatoire').max(2000),
-  style: z.string().min(1),
-  key: z.string().min(1),
-  tempo: z.number().min(40).max(240),
-  instrument: z.string().min(1),
+  style: z.string().optional(),
+  key: z.string().optional(),
+  tempo: z.number().min(40).max(240).optional(),
+  instrument: z.string().optional(),
+  measures: z.number().int().min(1).max(128).optional(),
 })
 
 type GenerateInput = z.infer<typeof generateSchema>
@@ -28,10 +29,11 @@ type GenerateInput = z.infer<typeof generateSchema>
 export default function HomePage() {
   const [form, setForm] = useState<GenerateInput>({
     prompt: '',
-    style: 'Swing',
-    key: 'C',
-    tempo: 120,
-    instrument: 'Piano',
+    style: undefined,
+    key: undefined,
+    tempo: undefined,
+    instrument: undefined,
+    measures: undefined,
   })
   const [xml, setXml] = useState<string>('')
   const [xmlBytes, setXmlBytes] = useState<number>(0)
@@ -78,7 +80,7 @@ export default function HomePage() {
   }, [form])
 
   const onReset = useCallback(() => {
-    setForm({ prompt: '', style: 'Swing', key: 'C', tempo: 120, instrument: 'Piano' })
+    setForm({ prompt: '', style: undefined, key: undefined, tempo: undefined, instrument: undefined, measures: undefined })
     setXml('')
     setXmlBytes(0)
     setScoreId(null)
@@ -180,7 +182,7 @@ export default function HomePage() {
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-2">
-                <label className="text-sm font-medium">Instrument</label>
+                <label className="text-sm font-medium">Instrument (optionnel)</label>
                 <Select value={form.instrument} onValueChange={(v) => setForm((f) => ({ ...f, instrument: v }))}>
                   <SelectTrigger><SelectValue placeholder="Instrument" /></SelectTrigger>
                   <SelectContent>
@@ -191,7 +193,7 @@ export default function HomePage() {
                 </Select>
               </div>
               <div className="space-y-2">
-                <label className="text-sm font-medium">Tonalité</label>
+                <label className="text-sm font-medium">Tonalité (optionnel)</label>
                 <Select value={form.key} onValueChange={(v) => setForm((f) => ({ ...f, key: v }))}>
                   <SelectTrigger><SelectValue placeholder="Tonalité" /></SelectTrigger>
                   <SelectContent>
@@ -202,12 +204,40 @@ export default function HomePage() {
                 </Select>
               </div>
             </div>
-            <div className="space-y-2">
-              <label className="text-sm font-medium">Tempo: {form.tempo} BPM</label>
-              <Slider value={[form.tempo]} min={40} max={240} step={1} onValueChange={(v) => setForm((f) => ({ ...f, tempo: v[0] }))} />
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-2">
+                <label className="text-sm font-medium">Tempo (optionnel)</label>
+                <input
+                  type="number"
+                  min={40}
+                  max={240}
+                  placeholder="BPM"
+                  value={form.tempo ?? ''}
+                  onChange={(e) => {
+                    const v = e.target.value
+                    setForm((f) => ({ ...f, tempo: v === '' ? undefined : Math.max(40, Math.min(240, Number(v))) }))
+                  }}
+                  className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                />
+              </div>
+              <div className="space-y-2">
+                <label className="text-sm font-medium">Nombre de mesures (optionnel)</label>
+                <input
+                  type="number"
+                  min={1}
+                  max={128}
+                  placeholder="ex: 16"
+                  value={form.measures ?? ''}
+                  onChange={(e) => {
+                    const v = e.target.value
+                    setForm((f) => ({ ...f, measures: v === '' ? undefined : Math.max(1, Math.min(128, Number(v))) }))
+                  }}
+                  className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                />
+              </div>
             </div>
             <div className="space-y-2">
-              <label className="text-sm font-medium">Style</label>
+              <label className="text-sm font-medium">Style (optionnel)</label>
               <Select value={form.style} onValueChange={(v) => setForm((f) => ({ ...f, style: v }))}>
                 <SelectTrigger><SelectValue placeholder="Style" /></SelectTrigger>
                 <SelectContent>
