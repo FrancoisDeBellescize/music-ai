@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
-import { openai, SYSTEM_PROMPT, MODEL_ID, FALLBACK_MODEL_ID } from '@/lib/openai'
+import { getOpenAI, SYSTEM_PROMPT, MODEL_ID, FALLBACK_MODEL_ID } from '@/lib/openai'
 import { isLikelyMusicXML, tryExtractMusicXML } from '@/lib/validate-musicxml'
 import { rateLimitOk } from '@/lib/rate-limit'
 
@@ -19,7 +19,7 @@ async function generateXml(input: z.infer<typeof InputSchema>): Promise<string> 
   try {
     const controller = new AbortController()
     const t = setTimeout(() => controller.abort(), 80_000)
-    const completion = await openai.chat.completions.create(
+    const completion = await getOpenAI().chat.completions.create(
       {
         model: MODEL_ID,
         messages: [
@@ -34,7 +34,7 @@ async function generateXml(input: z.infer<typeof InputSchema>): Promise<string> 
     return completion.choices?.[0]?.message?.content?.trim() || ''
   } catch (err) {
     // Fallback to a faster/smaller model
-    const completion = await openai.chat.completions.create({
+    const completion = await getOpenAI().chat.completions.create({
       model: FALLBACK_MODEL_ID,
       messages: [
         { role: 'system', content: SYSTEM_PROMPT },
@@ -67,7 +67,7 @@ export async function POST(req: NextRequest) {
         const bytes = Buffer.byteLength(extracted, 'utf8')
         return NextResponse.json({ xml: extracted, bytes })
       }
-      const completion = await openai.chat.completions.create({
+      const completion = await getOpenAI().chat.completions.create({
         model: FALLBACK_MODEL_ID,
         max_tokens: 4096,
         messages: [
