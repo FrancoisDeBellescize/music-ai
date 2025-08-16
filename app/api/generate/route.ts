@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 import { getOpenAI, SYSTEM_PROMPT, MODEL_ID, FALLBACK_MODEL_ID, PLANNER_PROMPT } from '@/lib/openai'
-import { isLikelyMusicXML, tryExtractMusicXML, normalizeMusicXML } from '@/lib/validate-musicxml'
+import { isLikelyMusicXML, tryExtractMusicXML, normalizeMusicXML, countMeasures } from '@/lib/validate-musicxml'
 import { rateLimitOk } from '@/lib/rate-limit'
 
 export const runtime = 'nodejs'
@@ -22,19 +22,44 @@ const InputSchema = z.object({
 })
 
 async function generateXml(input: z.infer<typeof InputSchema>): Promise<string> {
+  const extractMeasuresFromPrompt = (text: string): number | undefined => {
+    if (!text) return undefined
+    const m = text.match(/mesures?\s*[:=]?\s*(\d{1,3})/i)
+    if (m) {
+      const n = Number(m[1])
+      if (Number.isFinite(n) && n >= 1 && n <= 128) return n
+    }
+    return undefined
+  }
   const style = input.style ?? 'non spécifié'
   const key = input.key ?? 'non spécifié'
-  const tempoText = input.tempo != null ? `${input.tempo} BPM` : 'non spécifié'
+  const isBossa = (style.toLowerCase().includes('bossa') || input.prompt.toLowerCase().includes('bossa'))
+  const inferredTempo = input.tempo ?? (isBossa ? 130 : undefined)
+  const tempoText = inferredTempo != null ? `${inferredTempo} BPM` : 'non spécifié'
   const instrument = input.instrument ?? 'non spécifié'
   const measures = input.measures != null ? String(input.measures) : 'non spécifié'
-  const timeSignature = input.timeSignature ?? 'non spécifié'
+  const timeSignature = input.timeSignature ?? (isBossa ? '4/4' : 'non spécifié')
   const form = input.form ?? 'non spécifié'
-  const complexity = input.complexity != null ? String(input.complexity) : 'non spécifié'
+  const complexity = String(input.complexity ?? 3)
   const polyphony = input.polyphony ?? 'non spécifié'
   const mood = input.mood ?? 'non spécifié'
   const instrumentation = input.instrumentation?.join(', ') ?? (instrument !== 'non spécifié' ? instrument : 'non spécifié')
 
-  const briefPrompt = `Brief de composition:\n- Style & influences: ${style}\n- Humeur & énergie: ${mood}\n- Forme & longueur: ${form} sur ${measures} mesures\n- Mesure & tempo: ${timeSignature}, ${tempoText}\n- Tonalité & armure: ${key}\n- Instrumentation: ${instrumentation}\n- Polyphonie: ${polyphony}\n- Complexité (1–5): ${complexity}\n- Consignes: ${input.prompt}\n\nRendu attendu:\n- Respecter strictement MusicXML 3.1 (score-partwise) conformément au message système.\n- Utiliser 1 à 3 parties selon l’instrumentation. Assurer accompagnement/contrepoint si pertinent.\n- Varier motifs, inclure développement thématique, voicings/idiomes du style.\n- Si complexité ≥ 3: enrichir harmonie/contrepoint/layering selon le style.\n- Fin de section avec cadence/fill selon le style.`
+  const targetMeasures = input.measures ?? extractMeasuresFromPrompt(input.prompt)
+  const styleGuidance = isBossa
+    ? `\n- Idiomes bossa nova: basse MG syncopée (binaire), anacrouses/anticipations (\"et\" de 2), accords enrichis MD (7, 9, 11, 13), voix intérieures en mouvement conjoint, ii–V–I fréquents, substitutions tritonique occasionnelles, dynamique douce.`
+    : ''
+  const isPiano = (instrument.toLowerCase().includes('piano') || instrumentation.toLowerCase().includes('piano') || input.prompt.toLowerCase().includes('piano'))
+  const measuresLine = typeof targetMeasures === 'number'
+    ? `Forme & longueur: ${form} sur ${targetMeasures} mesures (EXACTEMENT ${targetMeasures} mesures, pas plus, pas moins)`
+    : `Forme & longueur: ${form} (nombre de mesures libre si non précisé)`
+  const pianoLine = isPiano
+    ? `\n- Pour piano: 2 portées (clef de sol et clef de fa) dans une seule <part id=\"P1\"> avec <attributes><staves>2</staves></attributes>. Déclarer deux <clef>. Taguer chaque note avec <staff>1</staff> (MD) ou <staff>2</staff> (MG).`
+    : ''
+  const strictMeasuresLine = typeof targetMeasures === 'number'
+    ? `\n- IMPORTANT: Produire EXACTEMENT ${targetMeasures} balises <measure>. Aucune mesure en plus ni en moins.`
+    : ''
+  const briefPrompt = `Brief de composition:\n- Style & influences: ${style}\n- Humeur & énergie: ${mood}\n- ${measuresLine}\n- Mesure & tempo: ${timeSignature}, ${tempoText}\n- Tonalité & armure: ${key}\n- Instrumentation: ${instrumentation}\n- Polyphonie: ${polyphony}\n- Complexité (1–5): ${complexity}\n- Consignes: ${input.prompt}${styleGuidance}\n\nRendu attendu:\n- Respecter strictement MusicXML 3.1 (score-partwise) conformément au message système.${pianoLine}\n- Varier motifs, inclure développement thématique, voicings/idiomes du style.\n- Si complexité ≥ 3: enrichir harmonie/contrepoint/layering selon le style.\n- Fin de section avec cadence/fill selon le style.${strictMeasuresLine}`
   try {
     // Pass 1: Plan JSON
     const planRes = await getOpenAI().chat.completions.create({
@@ -97,6 +122,27 @@ async function generateXml(input: z.infer<typeof InputSchema>): Promise<string> 
         max_tokens: 8192,
       })
       xmlOut = fix.choices?.[0]?.message?.content?.trim() || xmlOut
+    }
+
+    // Mesure count enforcement (only if a target is specified)
+    if (typeof targetMeasures === 'number') {
+      const measureCount = countMeasures(xmlOut)
+      if (measureCount !== targetMeasures) {
+        const fixMeasures = await getOpenAI().chat.completions.create({
+          model: MODEL_ID,
+          temperature: 0.9,
+          top_p: 0.95,
+          presence_penalty: 0.3,
+          frequency_penalty: 0.2,
+          messages: [
+            { role: 'system', content: SYSTEM_PROMPT },
+            { role: 'user', content: briefPrompt },
+            { role: 'user', content: `Le rendu précédent contient ${measureCount} mesures, mais il en faut EXACTEMENT ${targetMeasures}. Regénère le même contenu en ajustant le phrasé et la mise en page pour respecter strictement ${targetMeasures} balises <measure> (pas plus, pas moins).` },
+          ],
+          max_tokens: 8192,
+        })
+        xmlOut = fixMeasures.choices?.[0]?.message?.content?.trim() || xmlOut
+      }
     }
 
     return xmlOut

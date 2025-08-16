@@ -58,6 +58,23 @@ export function normalizeMusicXML(xml: string): string | null {
   // Remove unknown children often seen inside the non-standard block
   out = out.replace(/<percussion>[^<]*<\/percussion>/gi, '')
   out = out.replace(/<woodwind>[^<]*<\/woodwind>/gi, '')
+  // Normalize clef <sign> values to valid set {C, G, F, TAB}
+  out = out.replace(/<sign>\s*treble\s*<\/sign>/gi, '<sign>G<\/sign>')
+  out = out.replace(/<sign>\s*bass\s*<\/sign>/gi, '<sign>F<\/sign>')
+  out = out.replace(/<sign>\s*(alto|tenor)\s*<\/sign>/gi, '<sign>C<\/sign>')
+  out = out.replace(/<sign>\s*g\s*<\/sign>/gi, '<sign>G<\/sign>')
+  out = out.replace(/<sign>\s*f\s*<\/sign>/gi, '<sign>F<\/sign>')
+  out = out.replace(/<sign>\s*c\s*<\/sign>/gi, '<sign>C<\/sign>')
+  out = out.replace(/<sign>\s*tab\s*<\/sign>/gi, '<sign>TAB<\/sign>')
+  // Last resort: coerce any other sign to a known value (prefer G)
+  out = out.replace(/<sign>\s*([^<\s][^<]*)\s*<\/sign>/gi, (m: string, signVal: string) => {
+    const s = signVal.trim().toUpperCase()
+    if (s === 'G' || s === 'F' || s === 'C' || s === 'TAB') return `<sign>${s}<\/sign>`
+    if (s === 'TREBLE') return '<sign>G<\/sign>'
+    if (s === 'BASS') return '<sign>F<\/sign>'
+    if (s === 'ALTO' || s === 'TENOR') return '<sign>C<\/sign>'
+    return '<sign>G<\/sign>'
+  })
   // If <part-list> contains <part-id>, replace with a proper <score-part>
   if (/<part-list>[\s\S]*?<part-id\b/i.test(out) && !/<score-part\b/i.test(out)) {
     const partIdMatch = out.match(/<part\s+id=["']([^"']+)["']/i)
@@ -104,6 +121,13 @@ export function normalizeMusicXML(xml: string): string | null {
   }
   // Final well-formedness check
   return XMLValidator.validate(out) === true ? out : null
+}
+
+// Counts the number of <measure> elements in a MusicXML string
+export function countMeasures(xml: string): number {
+  if (!xml) return 0
+  const matches = xml.match(/<measure\b[^>]*>/gi)
+  return matches ? matches.length : 0
 }
 
 
