@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 import { getOpenAI, SYSTEM_PROMPT, MODEL_ID, FALLBACK_MODEL_ID } from '@/lib/openai'
-import { isLikelyMusicXML, tryExtractMusicXML } from '@/lib/validate-musicxml'
+import { isLikelyMusicXML, tryExtractMusicXML, normalizeMusicXML } from '@/lib/validate-musicxml'
 import { rateLimitOk } from '@/lib/rate-limit'
 
 export const runtime = 'nodejs'
@@ -64,8 +64,11 @@ export async function POST(req: NextRequest) {
     if (!isLikelyMusicXML(xml)) {
       const extracted = tryExtractMusicXML(xml)
       if (extracted) {
-        const bytes = Buffer.byteLength(extracted, 'utf8')
-        return NextResponse.json({ xml: extracted, bytes })
+        const normalized = normalizeMusicXML(extracted)
+        if (normalized) {
+          const bytes = Buffer.byteLength(normalized, 'utf8')
+          return NextResponse.json({ xml: normalized, bytes })
+        }
       }
       const completion = await getOpenAI().chat.completions.create({
         model: FALLBACK_MODEL_ID,
@@ -79,14 +82,21 @@ export async function POST(req: NextRequest) {
       if (!isLikelyMusicXML(xml)) {
         const ex2 = tryExtractMusicXML(xml)
         if (ex2) {
-          const bytes = Buffer.byteLength(ex2, 'utf8')
-          return NextResponse.json({ xml: ex2, bytes })
+          const normalized = normalizeMusicXML(ex2)
+          if (normalized) {
+            const bytes = Buffer.byteLength(normalized, 'utf8')
+            return NextResponse.json({ xml: normalized, bytes })
+          }
         }
         return NextResponse.json({ error: 'Invalid MusicXML from model' }, { status: 502 })
       }
     }
-    const bytes = Buffer.byteLength(xml, 'utf8')
-    return NextResponse.json({ xml, bytes })
+    const normalizedFinal = normalizeMusicXML(xml)
+    if (!normalizedFinal) {
+      return NextResponse.json({ error: 'Invalid MusicXML after normalization' }, { status: 502 })
+    }
+    const bytes = Buffer.byteLength(normalizedFinal, 'utf8')
+    return NextResponse.json({ xml: normalizedFinal, bytes })
   } catch (e: any) {
     const message = e?.message || 'OpenAI error'
     return NextResponse.json({ error: 'OpenAI error', message }, { status: 500 })
