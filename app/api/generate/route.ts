@@ -15,7 +15,7 @@ const InputSchema = z.object({
 })
 
 async function generateXml(input: z.infer<typeof InputSchema>): Promise<string> {
-  const userPrompt = `Contexte utilisateur:\nStyle: ${input.style}\nTonalité: ${input.key}\nTempo: ${input.tempo} BPM\nInstrument: ${input.instrument}\nConsignes: ${input.prompt}\n\nRéponds uniquement par un document MusicXML valide.`
+  const userPrompt = `Paramètres utilisateur:\n- Style: ${input.style}\n- Tonalité: ${input.key}\n- Tempo: ${input.tempo} BPM\n- Instrument: ${input.instrument}\n- Consignes: ${input.prompt}\n\nCONTRAINTE DE FORMAT (OBLIGATOIRE): Produit EXCLUSIVEMENT un document MusicXML 3.1 valide (score-partwise) respectant les règles du système, avec l'en-tête, le DOCTYPE et la structure <part-list>/<score-part id=\"P1\"> cohérente avec <part id=\"P1\">. Aucune explication ni code block.`
   try {
     const controller = new AbortController()
     const t = setTimeout(() => controller.abort(), 80_000)
@@ -75,7 +75,7 @@ export async function POST(req: NextRequest) {
         max_tokens: 4096,
         messages: [
           { role: 'system', content: SYSTEM_PROMPT },
-          { role: 'user', content: 'ONLY VALID MUSICXML. No text. Regenerate.' },
+          { role: 'user', content: 'Regénère en respectant strictement MusicXML 3.1 partwise + DOCTYPE + part-list/score-part P1 + part P1. Aucun texte, aucun ```.' },
         ],
       })
       xml = completion.choices?.[0]?.message?.content?.trim() || ''
