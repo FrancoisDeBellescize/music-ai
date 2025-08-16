@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getOpenAI, SYSTEM_PROMPT, MODEL_ID, FALLBACK_MODEL_ID } from '@/lib/openai'
+import { getOpenAI, SYSTEM_PROMPT, MODEL_ID, FALLBACK_MODEL_ID, PLANNER_PROMPT } from '@/lib/openai'
 import { isLikelyMusicXML, tryExtractMusicXML, normalizeMusicXML } from '@/lib/validate-musicxml'
 import { rateLimitOk } from '@/lib/rate-limit'
 
@@ -13,24 +13,56 @@ const InputSchema = z.object({
   tempo: z.number().min(40).max(240).optional(),
   instrument: z.string().optional(),
   measures: z.number().int().min(1).max(128).optional(),
+  timeSignature: z.string().optional(),
+  form: z.string().optional(),
+  complexity: z.number().int().min(1).max(5).optional(),
+  polyphony: z.enum(['mono', 'two-voices', 'chords', 'multi-part']).optional(),
+  mood: z.string().optional(),
+  instrumentation: z.array(z.string()).optional(),
 })
 
 async function generateXml(input: z.infer<typeof InputSchema>): Promise<string> {
   const style = input.style ?? 'non spécifié'
   const key = input.key ?? 'non spécifié'
-  const tempo = input.tempo != null ? `${input.tempo} BPM` : 'non spécifié'
+  const tempoText = input.tempo != null ? `${input.tempo} BPM` : 'non spécifié'
   const instrument = input.instrument ?? 'non spécifié'
   const measures = input.measures != null ? String(input.measures) : 'non spécifié'
-  const userPrompt = `Paramètres utilisateur:\n- Style: ${style}\n- Tonalité: ${key}\n- Tempo: ${tempo}\n- Instrument: ${instrument}\n- Nombre de mesures souhaité: ${measures}\n- Consignes: ${input.prompt}\n\nSi un paramètre est non spécifié, choisis des valeurs musicales plausibles et cohérentes. Si un nombre de mesures est fourni, limiter la composition à ce nombre.\n\nCONTRAINTE DE FORMAT (OBLIGATOIRE): Produit EXCLUSIVEMENT un document MusicXML 3.1 valide (score-partwise) respectant les règles du système, avec l'en-tête, le DOCTYPE et la structure <part-list>/<score-part id=\"P1\"> cohérente avec <part id=\"P1\">. Aucune explication ni code block.`
+  const timeSignature = input.timeSignature ?? 'non spécifié'
+  const form = input.form ?? 'non spécifié'
+  const complexity = input.complexity != null ? String(input.complexity) : 'non spécifié'
+  const polyphony = input.polyphony ?? 'non spécifié'
+  const mood = input.mood ?? 'non spécifié'
+  const instrumentation = input.instrumentation?.join(', ') ?? (instrument !== 'non spécifié' ? instrument : 'non spécifié')
+
+  const briefPrompt = `Brief de composition:\n- Style & influences: ${style}\n- Humeur & énergie: ${mood}\n- Forme & longueur: ${form} sur ${measures} mesures\n- Mesure & tempo: ${timeSignature}, ${tempoText}\n- Tonalité & armure: ${key}\n- Instrumentation: ${instrumentation}\n- Polyphonie: ${polyphony}\n- Complexité (1–5): ${complexity}\n- Consignes: ${input.prompt}\n\nRendu attendu:\n- Respecter strictement MusicXML 3.1 (score-partwise) conformément au message système.\n- Utiliser 1 à 3 parties selon l’instrumentation. Assurer accompagnement/contrepoint si pertinent.\n- Varier motifs, inclure développement thématique, voicings/idiomes du style.\n- Si complexité ≥ 3: enrichir harmonie/contrepoint/layering selon le style.\n- Fin de section avec cadence/fill selon le style.`
   try {
+    // Pass 1: Plan JSON
+    const planRes = await getOpenAI().chat.completions.create({
+      model: FALLBACK_MODEL_ID,
+      temperature: 0.4,
+      messages: [
+        { role: 'system', content: PLANNER_PROMPT },
+        { role: 'user', content: briefPrompt },
+      ],
+      max_tokens: 1200,
+    })
+    const plan = planRes.choices?.[0]?.message?.content?.trim() || '{}'
+
+    // Pass 2: Rendu MusicXML
+    const renderPrompt = `Plan (JSON):\n${plan}\n\nGénère maintenant la partition selon ce plan.`
     const controller = new AbortController()
-    const t = setTimeout(() => controller.abort(), 80_000)
+    const t = setTimeout(() => controller.abort(), 90_000)
     const completion = await getOpenAI().chat.completions.create(
       {
         model: MODEL_ID,
+        temperature: 1.05,
+        top_p: 0.95,
+        presence_penalty: 0.6,
+        frequency_penalty: 0.3,
         messages: [
           { role: 'system', content: SYSTEM_PROMPT },
-          { role: 'user', content: userPrompt },
+          { role: 'user', content: briefPrompt },
+          { role: 'user', content: renderPrompt },
         ],
         max_tokens: 8192,
       },
@@ -39,12 +71,16 @@ async function generateXml(input: z.infer<typeof InputSchema>): Promise<string> 
     clearTimeout(t)
     return completion.choices?.[0]?.message?.content?.trim() || ''
   } catch (err) {
-    // Fallback to a faster/smaller model
+    // Fallback single-pass si la 2-pass échoue
     const completion = await getOpenAI().chat.completions.create({
       model: FALLBACK_MODEL_ID,
+      temperature: 0.9,
+      top_p: 0.95,
+      presence_penalty: 0.5,
+      frequency_penalty: 0.25,
       messages: [
         { role: 'system', content: SYSTEM_PROMPT },
-        { role: 'user', content: userPrompt },
+        { role: 'user', content: briefPrompt },
       ],
       max_tokens: 8192,
     })
@@ -81,7 +117,7 @@ export async function POST(req: NextRequest) {
         max_tokens: 4096,
         messages: [
           { role: 'system', content: SYSTEM_PROMPT },
-          { role: 'user', content: 'Regénère en respectant strictement MusicXML 3.1 partwise + DOCTYPE + part-list/score-part P1 + part P1. Aucun texte, aucun ```.' },
+          { role: 'user', content: 'Regénère en respectant strictement MusicXML 3.1 partwise + DOCTYPE + part-list cohérente avec les <part id="..."> correspondants. Aucun texte, aucun ```.' },
         ],
       })
       xml = completion.choices?.[0]?.message?.content?.trim() || ''

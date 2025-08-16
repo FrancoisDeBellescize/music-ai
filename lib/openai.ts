@@ -8,32 +8,52 @@ export function getOpenAI() {
   return new OpenAI({ apiKey })
 }
 
-export const SYSTEM_PROMPT = `RÈGLES STRICTES DE SORTIE (AUCUNE EXCEPTION):
-1) Réponds UNIQUEMENT par un document MusicXML 3.1 bien-formé. Aucun texte, commentaire, balise de code ou explication avant/après.
-2) En-tête OBLIGATOIRE exactement:
+export const SYSTEM_PROMPT = `Tu dois produire UNIQUEMENT un document MusicXML 3.1 valide (score-partwise). Aucune explication, aucun code block, aucun texte hors XML.
+
+Exigences minimales:
+- En-tête exact:
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE score-partwise PUBLIC "-//Recordare//DTD MusicXML 3.1 Partwise//EN" "http://www.musicxml.org/dtds/partwise.dtd">
-<score-partwise version="3.1">
-... contenu ...
-</score-partwise>
-3) INTERDIT: racine <musicxml>, namespaces HTML/XHTML, balises markdown (\`\`\`), texte libre.
-4) Partie unique avec correspondance stricte entre <part-list>/<score-part id="P1"> et <part id="P1">.
-   - Dans <part-list>:
-     <score-part id="P1">
-       <part-name>{NomInstrument}</part-name>
-       <score-instrument id="P1-I1"><instrument-name>{NomInstrument}</instrument-name></score-instrument>
-     </score-part>
-   - Ensuite: <part id="P1"> ... </part>
-5) Inclure <identification> (creator, encoding) et au moins un <credit> avec le titre.
-6) Respecter les paramètres utilisateur (métrique/mesures, armure, tempo, clef, portée(s), instrument).
-7) Pas plus de 128 mesures. Musique plausible, durées cohérentes, mesures équilibrées.
-8) Aucune balise <tie> si tu n'émets pas les paires start/stop correctement.
-9) Toujours valide DTD 3.1 (score-partwise).
-10) Représentation du tempo: dans la première mesure de P1, inclure à la fois <sound tempo="{Tempo}"/> et un <direction><direction-type><metronome><beat-unit>quarter</beat-unit><per-minute>{Tempo}</per-minute></metronome></direction-type><staff>1</staff></direction>.
-11) L'instrument demandé doit apparaître tel quel dans <part-name> et <instrument-name> du <score-part id="P1">. Utiliser exactement le nom reçu, sans variation.
-`
+- Racine: <score-partwise version="3.1"> … </score-partwise>
+- <part-list> cohérente avec chaque <part id="..."> (ids alignés).
+- Inclure <identification> (au moins <creator>) et au moins un <credit> (titre).
+- Mesures bien formées: durées qui complètent la métrique; éviter des <tie> orphelins.
+- Si un tempo est donné: placer <sound tempo="..."> et un <direction> avec métronome dans la première mesure.
+
+Interdit: balises markdown, texte libre, namespaces HTML/XHTML.`
 
 export const MODEL_ID = process.env.OPENAI_MODEL || 'gpt-5'
 export const FALLBACK_MODEL_ID = process.env.OPENAI_FALLBACK_MODEL || 'gpt-4o-mini'
+
+export const PLANNER_PROMPT = `Tu es un planificateur de composition musicale.
+Objectif: produire un plan compact au format JSON (et rien d'autre) pour guider une composition dans un style donné.
+
+Exigences:
+- Répondre EXCLUSIVEMENT en JSON valide, sans commentaires ni texte hors JSON.
+- Clés attendues au minimum:
+  {
+    "style": string,
+    "mood": string,
+    "timeSignature": string,
+    "tempo": number,
+    "key": string,
+    "form": string,
+    "complexity": number,
+    "polyphony": "mono" | "two-voices" | "chords" | "multi-part",
+    "idioms": string[],
+    "techniques": string[],
+    "sections": [
+      {
+        "name": string,
+        "measures": number,
+        "key": string,
+        "harmony": string,
+        "rhythm": string,
+        "melodyContour": string,
+        "instrumentation": string[]
+      }
+    ]
+  }
+`
 
 
