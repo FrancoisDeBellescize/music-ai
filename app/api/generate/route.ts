@@ -69,7 +69,37 @@ async function generateXml(input: z.infer<typeof InputSchema>): Promise<string> 
       { signal: controller.signal as AbortSignal }
     )
     clearTimeout(t)
-    return completion.choices?.[0]?.message?.content?.trim() || ''
+    let xmlOut = completion.choices?.[0]?.message?.content?.trim() || ''
+
+    // Anti-silence: si quasi uniquement des silences, redemander un rendu avec contraintes anti-silence
+    const count = (re: RegExp, s: string) => (s.match(re) || []).length
+    const rests = count(/<rest\b/gi, xmlOut)
+    const pitches = count(/<pitch\b/gi, xmlOut)
+    const needsAntiSilence = pitches === 0 || rests > pitches * 1.2
+    if (needsAntiSilence) {
+      const antiSilencePrompt = `Le rendu ci-dessus contient trop de silences ou aucun <pitch>. Regénère en évitant les silences prédominants:
+- Minimum 80% de la durée totale en notes avec <pitch>.
+- Aucune section composée uniquement de silences.
+- Inclure une mélodie principale clairement définie et un accompagnement/contrepoint selon l’instrumentation.
+- N'utiliser <rest> que ponctuellement (respirations, fins de phrases).` 
+      const fix = await getOpenAI().chat.completions.create({
+        model: MODEL_ID,
+        temperature: 1.05,
+        top_p: 0.95,
+        presence_penalty: 0.6,
+        frequency_penalty: 0.3,
+        messages: [
+          { role: 'system', content: SYSTEM_PROMPT },
+          { role: 'user', content: briefPrompt },
+          { role: 'user', content: `Plan (JSON):\n${plan}` },
+          { role: 'user', content: antiSilencePrompt },
+        ],
+        max_tokens: 8192,
+      })
+      xmlOut = fix.choices?.[0]?.message?.content?.trim() || xmlOut
+    }
+
+    return xmlOut
   } catch (err) {
     // Fallback single-pass si la 2-pass échoue
     const completion = await getOpenAI().chat.completions.create({

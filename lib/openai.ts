@@ -10,15 +10,12 @@ export function getOpenAI() {
 
 export const SYSTEM_PROMPT = `Tu dois produire UNIQUEMENT un document MusicXML 3.1 valide (score-partwise). Aucune explication, aucun code block, aucun texte hors XML.
 
-Exigences minimales:
+Exigences de format minimales uniquement:
 - En-tête exact:
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE score-partwise PUBLIC "-//Recordare//DTD MusicXML 3.1 Partwise//EN" "http://www.musicxml.org/dtds/partwise.dtd">
 - Racine: <score-partwise version="3.1"> … </score-partwise>
 - <part-list> cohérente avec chaque <part id="..."> (ids alignés).
-- Inclure <identification> (au moins <creator>) et au moins un <credit> (titre).
-- Mesures bien formées: durées qui complètent la métrique; éviter des <tie> orphelins.
-- Si un tempo est donné: placer <sound tempo="..."> et un <direction> avec métronome dans la première mesure.
 
 Interdit: balises markdown, texte libre, namespaces HTML/XHTML.`
 

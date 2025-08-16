@@ -45,6 +45,9 @@ export default function HomePage() {
   const [importUrl, setImportUrl] = useState<string | null>(null)
   const [importingLink, setImportingLink] = useState<boolean>(false)
 
+  type HistoryEntry = { id: string; createdAt: number; data: GenerateInput }
+  const [history, setHistory] = useState<HistoryEntry[]>([])
+
   useEffect(() => {
     fetch('/api/flat/embed-config', { cache: 'no-store' })
       .then((r) => r.json())
@@ -52,6 +55,50 @@ export default function HomePage() {
         if (d && d.connected) setConnected(true)
       })
       .catch(() => {})
+  }, [])
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem('music-ia.history')
+      if (!raw) return
+      const parsed = JSON.parse(raw)
+      if (Array.isArray(parsed)) {
+        const valid: HistoryEntry[] = parsed.filter((e) => e && e.data && typeof e.createdAt === 'number' && typeof e.id === 'string')
+        setHistory(valid.sort((a, b) => b.createdAt - a.createdAt))
+      }
+    } catch {}
+  }, [])
+
+  const saveToHistory = useCallback((data: GenerateInput) => {
+    const entry: HistoryEntry = { id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, createdAt: Date.now(), data }
+    setHistory((prev) => {
+      const next = [entry, ...prev].slice(0, 50)
+      try {
+        localStorage.setItem('music-ia.history', JSON.stringify(next))
+      } catch {}
+      return next
+    })
+  }, [])
+
+  const applyHistory = useCallback((entry: HistoryEntry) => {
+    setForm({ ...entry.data })
+  }, [])
+
+  const deleteHistoryEntry = useCallback((id: string) => {
+    setHistory((prev) => {
+      const next = prev.filter((e) => e.id !== id)
+      try {
+        localStorage.setItem('music-ia.history', JSON.stringify(next))
+      } catch {}
+      return next
+    })
+  }, [])
+
+  const clearHistory = useCallback(() => {
+    setHistory([])
+    try {
+      localStorage.removeItem('music-ia.history')
+    } catch {}
   }, [])
 
   const onGenerate = useCallback(async () => {
@@ -72,12 +119,14 @@ export default function HomePage() {
       const data = await res.json()
       setXml(data.xml)
       setXmlBytes(data.bytes)
+      // Enregistrer l'entrée dans l'historique après une génération réussie
+      saveToHistory(parsed.data)
     } catch (e: any) {
       setError(e?.message || 'Erreur de génération')
     } finally {
       setLoading(false)
     }
-  }, [form])
+  }, [form, saveToHistory])
 
   const onReset = useCallback(() => {
     setForm({ prompt: '', style: undefined, key: undefined, tempo: undefined, instrument: undefined, measures: undefined })
@@ -263,6 +312,44 @@ export default function HomePage() {
               <Button variant="secondary" onClick={onReset} disabled={loading}>Réinitialiser</Button>
             </div>
             {error && <div className="text-sm text-red-600">{error}</div>}
+          </CardContent>
+        </Card>
+
+        <Card className="lg:col-span-1">
+          <CardHeader>
+            <CardTitle>Historique (local)</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {history.length === 0 ? (
+              <div className="text-sm text-muted-foreground">Aucun historique pour le moment. Générez une pièce pour enregistrer les paramètres.</div>) : (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <div className="text-sm text-muted-foreground">{history.length} éléments</div>
+                  <Button variant="outline" size="sm" onClick={clearHistory}>Vider</Button>
+                </div>
+                <div className="space-y-2 max-h-[340px] overflow-auto pr-1">
+                  {history.map((h) => (
+                    <div key={h.id} className="rounded-md border p-2">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="text-xs text-muted-foreground">{new Date(h.createdAt).toLocaleString()}</div>
+                        <div className="flex gap-2">
+                          <Button size="sm" variant="secondary" onClick={() => applyHistory(h)}>Charger</Button>
+                          <Button size="sm" variant="outline" onClick={() => deleteHistoryEntry(h.id)}>Supprimer</Button>
+                        </div>
+                      </div>
+                      <div className="mt-1 grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
+                        {h.data.style && (<div><span className="font-medium">Style:</span> {h.data.style}</div>)}
+                        {h.data.instrument && (<div><span className="font-medium">Instr.:</span> {h.data.instrument}</div>)}
+                        {h.data.key && (<div><span className="font-medium">Tonalité:</span> {h.data.key}</div>)}
+                        {typeof h.data.tempo !== 'undefined' && (<div><span className="font-medium">Tempo:</span> {h.data.tempo} BPM</div>)}
+                        {typeof h.data.measures !== 'undefined' && (<div><span className="font-medium">Mesures:</span> {h.data.measures}</div>)}
+                      </div>
+                      <div className="mt-2 text-xs line-clamp-3 whitespace-pre-wrap">{h.data.prompt}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </CardContent>
         </Card>
 
