@@ -60,6 +60,9 @@ export function humanizeAndQuantizeMIDI(score: SymbolicScore, cfg: ArrangeConfig
           start += applySwingOffset(Math.floor(start), gridDivs, swingRatio)
         }
 
+        // Never allow negative start divisions
+        if (start < 0) start = 0
+
         let timingOffsetMs = 0
         if (cfg.humanize.enabled && cfg.humanize.timingJitterMs > 0) {
           timingOffsetMs = Math.round(rng(-cfg.humanize.timingJitterMs, cfg.humanize.timingJitterMs))

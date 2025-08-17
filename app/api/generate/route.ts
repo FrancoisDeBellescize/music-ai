@@ -5,6 +5,8 @@ import { isLikelyMusicXML, tryExtractMusicXML, normalizeMusicXML, countMeasures 
 import { rateLimitOk } from '@/lib/rate-limit'
 
 export const runtime = 'nodejs'
+export const maxDuration = 300
+export const dynamic = 'force-dynamic'
 
 const InputSchema = z.object({
   prompt: z.string().min(1).max(2000),
@@ -21,7 +23,9 @@ const InputSchema = z.object({
   instrumentation: z.array(z.string()).optional(),
 })
 
-async function generateXml(input: z.infer<typeof InputSchema>): Promise<string> {
+async function generateXml(input: z.infer<typeof InputSchema>, deadlineAt: number): Promise<string> {
+  const msLeft = () => Math.max(0, deadlineAt - Date.now())
+  const hasTimeFor = (neededMs: number) => msLeft() > neededMs
   const extractMeasuresFromPrompt = (text: string): number | undefined => {
     if (!text) return undefined
     const m = text.match(/mesures?\s*[:=]?\s*(\d{1,3})/i)
@@ -61,25 +65,30 @@ async function generateXml(input: z.infer<typeof InputSchema>): Promise<string> 
     : ''
   const briefPrompt = `Brief de composition:\n- Style & influences: ${style}\n- Humeur & énergie: ${mood}\n- ${measuresLine}\n- Mesure & tempo: ${timeSignature}, ${tempoText}\n- Tonalité & armure: ${key}\n- Instrumentation: ${instrumentation}\n- Polyphonie: ${polyphony}\n- Complexité (1–5): ${complexity}\n- Consignes: ${input.prompt}${styleGuidance}\n\nRendu attendu:\n- Respecter strictement MusicXML 3.1 (score-partwise) conformément au message système.${pianoLine}\n- Varier motifs, inclure développement thématique, voicings/idiomes du style.\n- Si complexité ≥ 3: enrichir harmonie/contrepoint/layering selon le style.\n- Fin de section avec cadence/fill selon le style.${strictMeasuresLine}`
   try {
-    // Pass 1: Plan JSON
-    const planRes = await getOpenAI().chat.completions.create({
-      model: FALLBACK_MODEL_ID,
-      temperature: 0.4,
-      messages: [
-        { role: 'system', content: PLANNER_PROMPT },
-        { role: 'user', content: briefPrompt },
-      ],
-      max_tokens: 1200,
-    })
-    const plan = planRes.choices?.[0]?.message?.content?.trim() || '{}'
+    // Pass 1: Plan JSON (only if we have comfortable budget)
+    let plan = '{}'
+    if (hasTimeFor(44_000)) {
+      const planTimeout = Math.min(8_000, Math.max(3_000, msLeft() - 38_000))
+      const planRes = await getOpenAI().chat.completions.create({
+        model: FALLBACK_MODEL_ID,
+        temperature: 0.4,
+        messages: [
+          { role: 'system', content: PLANNER_PROMPT },
+          { role: 'user', content: briefPrompt },
+        ],
+        max_tokens: 800,
+      }, { timeout: planTimeout } as any)
+      plan = planRes.choices?.[0]?.message?.content?.trim() || '{}'
+    }
 
     // Pass 2: Rendu MusicXML
     const renderPrompt = `Plan (JSON):\n${plan}\n\nGénère maintenant la partition selon ce plan.`
     const controller = new AbortController()
-    const t = setTimeout(() => controller.abort(), 90_000)
+    const mainBudget = Math.min(42_000, Math.max(3_000, msLeft() - 3_000))
+    const t = setTimeout(() => controller.abort(), mainBudget)
     const completion = await getOpenAI().chat.completions.create(
       {
-        model: MODEL_ID,
+        model: hasTimeFor(40_000) ? MODEL_ID : FALLBACK_MODEL_ID,
         temperature: 1.05,
         top_p: 0.95,
         presence_penalty: 0.6,
@@ -89,7 +98,7 @@ async function generateXml(input: z.infer<typeof InputSchema>): Promise<string> 
           { role: 'user', content: briefPrompt },
           { role: 'user', content: renderPrompt },
         ],
-        max_tokens: 8192,
+        max_tokens: 4096,
       },
       { signal: controller.signal as AbortSignal }
     )
@@ -101,14 +110,15 @@ async function generateXml(input: z.infer<typeof InputSchema>): Promise<string> 
     const rests = count(/<rest\b/gi, xmlOut)
     const pitches = count(/<pitch\b/gi, xmlOut)
     const needsAntiSilence = pitches === 0 || rests > pitches * 1.2
-    if (needsAntiSilence) {
+    if (needsAntiSilence && hasTimeFor(9_000)) {
       const antiSilencePrompt = `Le rendu ci-dessus contient trop de silences ou aucun <pitch>. Regénère en évitant les silences prédominants:
 - Minimum 80% de la durée totale en notes avec <pitch>.
 - Aucune section composée uniquement de silences.
 - Inclure une mélodie principale clairement définie et un accompagnement/contrepoint selon l’instrumentation.
 - N'utiliser <rest> que ponctuellement (respirations, fins de phrases).` 
+      const fixTimeout = Math.min(8_000, Math.max(3_000, msLeft() - 2_000))
       const fix = await getOpenAI().chat.completions.create({
-        model: MODEL_ID,
+        model: hasTimeFor(12_000) ? MODEL_ID : FALLBACK_MODEL_ID,
         temperature: 1.05,
         top_p: 0.95,
         presence_penalty: 0.6,
@@ -119,17 +129,18 @@ async function generateXml(input: z.infer<typeof InputSchema>): Promise<string> 
           { role: 'user', content: `Plan (JSON):\n${plan}` },
           { role: 'user', content: antiSilencePrompt },
         ],
-        max_tokens: 8192,
-      })
+        max_tokens: 2048,
+      }, { timeout: fixTimeout } as any)
       xmlOut = fix.choices?.[0]?.message?.content?.trim() || xmlOut
     }
 
     // Mesure count enforcement (only if a target is specified)
-    if (typeof targetMeasures === 'number') {
+    if (typeof targetMeasures === 'number' && hasTimeFor(9_000)) {
       const measureCount = countMeasures(xmlOut)
       if (measureCount !== targetMeasures) {
+        const measureFixTimeout = Math.min(8_000, Math.max(3_000, msLeft() - 2_000))
         const fixMeasures = await getOpenAI().chat.completions.create({
-          model: MODEL_ID,
+          model: hasTimeFor(12_000) ? MODEL_ID : FALLBACK_MODEL_ID,
           temperature: 0.9,
           top_p: 0.95,
           presence_penalty: 0.3,
@@ -139,8 +150,8 @@ async function generateXml(input: z.infer<typeof InputSchema>): Promise<string> 
             { role: 'user', content: briefPrompt },
             { role: 'user', content: `Le rendu précédent contient ${measureCount} mesures, mais il en faut EXACTEMENT ${targetMeasures}. Regénère le même contenu en ajustant le phrasé et la mise en page pour respecter strictement ${targetMeasures} balises <measure> (pas plus, pas moins).` },
           ],
-          max_tokens: 8192,
-        })
+          max_tokens: 2048,
+        }, { timeout: measureFixTimeout } as any)
         xmlOut = fixMeasures.choices?.[0]?.message?.content?.trim() || xmlOut
       }
     }
@@ -148,6 +159,7 @@ async function generateXml(input: z.infer<typeof InputSchema>): Promise<string> 
     return xmlOut
   } catch (err) {
     // Fallback single-pass si la 2-pass échoue
+    const fbTimeout = Math.min(10_000, Math.max(3_000, msLeft() - 1_000))
     const completion = await getOpenAI().chat.completions.create({
       model: FALLBACK_MODEL_ID,
       temperature: 0.9,
@@ -158,8 +170,8 @@ async function generateXml(input: z.infer<typeof InputSchema>): Promise<string> 
         { role: 'system', content: SYSTEM_PROMPT },
         { role: 'user', content: briefPrompt },
       ],
-      max_tokens: 8192,
-    })
+      max_tokens: 3072,
+    }, { timeout: fbTimeout } as any)
     return completion.choices?.[0]?.message?.content?.trim() || ''
   }
 }
@@ -178,7 +190,8 @@ export async function POST(req: NextRequest) {
   if (!parsed.success) return NextResponse.json({ error: 'Invalid input' }, { status: 400 })
 
   try {
-    let xml = await generateXml(parsed.data)
+    const deadlineAt = Date.now() + 48_000
+    let xml = await generateXml(parsed.data, deadlineAt)
     if (!isLikelyMusicXML(xml)) {
       const extracted = tryExtractMusicXML(xml)
       if (extracted) {
@@ -188,14 +201,18 @@ export async function POST(req: NextRequest) {
           return NextResponse.json({ xml: normalized, bytes })
         }
       }
+      const retryBudget = Math.max(2_000, deadlineAt - Date.now() - 1_000)
+      if (retryBudget < 2_000) {
+        return NextResponse.json({ error: 'Invalid MusicXML from model' }, { status: 502 })
+      }
       const completion = await getOpenAI().chat.completions.create({
         model: FALLBACK_MODEL_ID,
-        max_tokens: 4096,
+        max_tokens: 2048,
         messages: [
           { role: 'system', content: SYSTEM_PROMPT },
           { role: 'user', content: 'Regénère en respectant strictement MusicXML 3.1 partwise + DOCTYPE + part-list cohérente avec les <part id="..."> correspondants. Aucun texte, aucun ```.' },
         ],
-      })
+      }, { timeout: retryBudget } as any)
       xml = completion.choices?.[0]?.message?.content?.trim() || ''
       if (!isLikelyMusicXML(xml)) {
         const ex2 = tryExtractMusicXML(xml)

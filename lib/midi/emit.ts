@@ -145,7 +145,9 @@ export function symbolicToMIDI(score: SymbolicScore, arrange?: ArrangeConfig & {
     const tr = trackObjs[e.trackIndex]
     const sourceTrack = score.tracks[e.trackIndex]
     const percussion = sourceTrack.clef === 'percussion' || sourceTrack.midi?.percussion === true || tr.channel === 9
-    const ticks = divsToTicks(e.startDivs) + msToTicks(e.timingOffsetMs ?? 0)
+    const baseTicks = divsToTicks(e.startDivs)
+    const offsetTicks = msToTicks(e.timingOffsetMs ?? 0)
+    const ticks = Math.max(0, baseTicks + offsetTicks)
     const durationTicks = divsToTicks(e.durDivs)
     if (!percussion) {
       const midiNumber = typeof e.pitch === 'string' ? pitchToMidi(e.pitch) : typeof e.pitch === 'number' ? e.pitch : 60
@@ -169,7 +171,7 @@ export function symbolicToMIDI(score: SymbolicScore, arrange?: ArrangeConfig & {
     ov.measures.forEach((m) => {
       const events = [...m.events].sort((a, b) => a.atDivs - b.atDivs)
       events.forEach((ev) => {
-        const ticks = divsToTicks(ev.atDivs) // quantize/swing/humanize: could be added similarly
+        const ticks = Math.max(0, divsToTicks(ev.atDivs)) // safety clamp
         const durationTicks = divsToTicks(ev.durDivs)
         if (Array.isArray(ev.notes)) {
           ev.notes.forEach((pn) => {

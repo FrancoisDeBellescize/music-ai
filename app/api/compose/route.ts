@@ -15,7 +15,7 @@ import { applyAccompaniment } from '@/lib/arrange/applyAccompaniment'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
-export const maxDuration = 60
+export const maxDuration = 300
 
 function pitchToMidi(pitch: string): number {
   const m = pitch.match(/^([A-G])((#|b){0,2})(-?\d+)$/)
@@ -262,34 +262,73 @@ export async function POST(req: NextRequest) {
       const completion = await client.chat.completions.create({
         model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
         temperature: 0.7,
-        timeout: 20000,
         response_format: { type: 'json_object' } as any,
+        max_tokens: 2000,
         messages: [
           { role: 'system', content: systemPrompt },
           { role: 'user', content: userContent },
         ],
-      })
+      }, { timeout: 60000 } as any)
       content = completion.choices[0]?.message?.content || ''
     } catch (e) {
       // Fallback shorter/cheaper model with tighter timeout
       const completion = await client.chat.completions.create({
         model: 'gpt-4o-mini',
         temperature: 0.6,
-        timeout: 12000,
         response_format: { type: 'json_object' } as any,
+        max_tokens: 1500,
         messages: [
           { role: 'system', content: systemPrompt },
           { role: 'user', content: userContent },
         ],
-      })
+      }, { timeout: 30000 } as any)
       content = completion.choices[0]?.message?.content || ''
     }
 
     const extracted = tryExtractJson(content)
-    if (!extracted) {
-      return NextResponse.json({ error: 'LLM a produit un contenu non JSON.' }, { status: 502 })
+    let data = coerceToSymbolicCandidate(extracted)
+    if (!data) {
+      // Fallback: generate a minimal valid SymbolicScore deterministically
+      const measuresCount = Math.max(1, Math.min(8, spec.length.measures))
+      const makeQuarterBar = (pitch: string) => ([
+        { pitch, dur: 'quarter' },
+        { pitch, dur: 'quarter' },
+        { pitch, dur: 'quarter' },
+        { pitch, dur: 'quarter' },
+      ])
+      const trackPitch = (name: string): string => {
+        if (name === 'bass') return 'C2'
+        if (name === 'chords') return 'C4'
+        if (name === 'melody') return 'E4'
+        if (name === 'strings' || name === 'pad') return 'C4'
+        if (name === 'drums') return ''
+        return 'C4'
+      }
+      const tracks = spec.instrumentation.map((name) => {
+        const clef = name === 'bass' ? 'bass' : 'treble'
+        const p = trackPitch(name)
+        const measures = Array.from({ length: measuresCount }, (_, i) => {
+          if (name === 'drums') {
+            return { number: i + 1, events: [ { rest: true, dur: 'whole' } ] }
+          }
+          return { number: i + 1, events: makeQuarterBar(p) }
+        })
+        return { name, clef, measures }
+      })
+      data = {
+        meta: {
+          title: spec.title,
+          style: spec.style,
+          tempoBPM: spec.tempoBPM,
+          timeSignature: spec.timeSignature,
+          key: spec.key,
+          length: { measures: measuresCount },
+        },
+        tracks,
+      }
     }
-    const data = coerceToSymbolicCandidate(extracted)
+    
+    // Ensure candidate still goes through normalization/validation pipeline
     const normalized = normalizeLLMOutput(data)
 
     const validated = zSymbolicScore.safeParse(normalized)
